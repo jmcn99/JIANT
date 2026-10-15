@@ -101,7 +101,7 @@ Los nombres de abajo son los que usa el firmware (la pantalla HARDWARE CALIBRATI
 | **LFO** | Páginas LFO. | Capa **MACRO**: KNOB 1–4 son M1–M4. |
 | **FX** | Páginas FX (dos toques rápidos: la siguiente sección de FX). | Capa de **FX punch-in**. |
 | **SCL** | Páginas SCL. | Capa **SCL**: las teclas fijan la tónica. |
-| **EDIT** | Páginas EDIT (en STEP: borra el paso; en USER / PROJECT: renombrar). | Capa **EDIT**: INIT, RECALL, mutes de los sonidos de DRUM-X. |
+| **EDIT** | Páginas EDIT (en STEP: borra el paso y los TIEs de su nota que lo siguen; en USER / PROJECT: renombrar). | Capa **EDIT**: INIT, RECALL, mutes de los sonidos de DRUM-X. |
 | **GLO** | MIXER → GLOBAL → SYSTEM → MIXER. | Capa **GLO**: mutes, solos, niveles, tap tempo, UNDO. |
 | **SAVE** | Páginas SAVE (primera pulsación: USER). | Capa **SAVE**: tocar/guardar secciones en vivo. |
 | **ARP** | Páginas ARP. | (sin capa) |
@@ -491,6 +491,12 @@ patrones de distinto largo giran unos contra otros.
 
 - **SEQ > STEP** en una pista melódica es un **piano roll**. KNOB 1 mueve el cursor de paso, KNOB 2 transpone el paso,
   KNOB 3 fija NOTE / TIE / REST, KNOB 4 fija acento / slide. Un paso guarda hasta cuatro notas.
+  - **Duración de notas con KNOB 3**: un **TIE** se estira hacia atrás hasta la nota más cercana: los pasos vacíos del
+    medio también pasan a ser TIEs (TIED 1-5), dentro de LEN y dando la vuelta al final. Una nota con el componente
+    PULSE no se rellena.
+  - Un **REST** sobre una nota (su NOTE o uno de sus TIEs) la corta ahí: los TIEs que siguen pasan a ser silencios
+    (CUT AT 3) y pierden sus parameter locks. Si seguís girando de TIE a NOTE, es una nota nueva y los TIEs rellenados
+    quedan; girar una NOTE pasando por TIE hasta REST borra esa nota y no rellena nada.
 - **Grabación por pasos**: en STEP, con el transporte **parado**, apretá **REC** (la pantalla dice KEYS WRITE STEPS).
   Tocá una nota o un acorde: entra en el paso del cursor y, cuando soltás, el cursor avanza. Sin armar, las teclas
   solo suenan.
@@ -500,7 +506,7 @@ patrones de distinto largo giran unos contra otros.
     a ser la resolución (1/16, 1/8, 1/8., 1/4: una nota cada 1–4 pasos), KNOB 2 el orden (UP, DOWN, UP-DN, RND) y
     KNOB 3 las octavas (1–3). La pantalla muestra lo elegido; al soltar se escribe y el cursor queda después. KNOB 4
     (y 2–3 sin ARP) sigue haciendo parameter locks en el paso.
-- **EDIT** (toque) en STEP borra el paso del cursor.
+- **EDIT** (toque) en STEP borra el paso del cursor; sobre una nota, también los TIEs que la siguen (como un REST en KNOB 3).
 - En una pista **DRUM**, STEP es una **grilla**: las teclas blancas son los 16 pasos de la página, las teclas negras
   1–8 eligen el carril (y lo tocan), la tecla negra 9 mantenida es ACC (las teclas blancas entonces activan o
   desactivan acentos), las teclas negras 10 / 11 bajan / suben de página cuando LEN pasa de 16. Perillas: STEP,

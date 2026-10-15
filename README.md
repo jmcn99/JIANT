@@ -525,6 +525,13 @@ JIANT's modifications are distributed under the same license.
 
 Every update is listed here, newest first. (Since 0.6.80 at the end of the page: what the synth does comes first.)
 
+### Unreleased (draft, after v0.7.2)
+- **Note lengths on SEQ > STEP with KNOB 3 (TIME)**, melodic tracks: a TIE stretches back to the nearest note before
+  it, the empty steps in between filled with TIEs (TIED 1-5; within LEN, round its end; not on a PULSE note); a REST
+  on a note cuts it there, the TIEs after it rests without their locks (CUT AT 3). On past TIE to NOTE keeps the fill;
+  NOTE through TIE to REST clears the note and fills nothing. EDIT on STEP clears a note's TIEs after the step too.
+  DRUM tracks, live and step recording as before.
+
 ### v0.7.2
 - **Nine DRUM-X kits as DRUM presets**: DRUM-X (the factory kit), 909 CLUB (driven kick, bright snare and hats, the
   snare and clap into the reverb), 808 BOOM (the long-decay kick and tom, the sine snare, soft hats, a metal cowbell),
