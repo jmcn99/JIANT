@@ -6456,6 +6456,95 @@ static int test_seq_tools(void)
     btn_up(B_SEQ); frame();
     bad += check("  LEDs: the tools breathe, the lane lit (DRUM); a melodic track: no BEAT, no lane keys", ok);
 
+    /* (JIANT) D5 COPY / E5 PASTE: the cursor's 16-step page */
+    ui_power_on();
+    tl_melody();                                        /* (LEN 8: C4 tied, E4 + its lock, G4; a note on 21) */
+    TSEL->p[P_SLEN] = 16;
+    (void)motion_set_event(TSEL, 5, P_DIST, 40);
+    (void)motion_set_lock(TSEL, 2, P_DIST, 10);         /* (a lock on an empty step: not pasted) */
+    tl_pg.valid = 0;
+    go_page(GR_ROLL); frame();
+    cursor_set(5);
+    btn_down(B_SEQ); frame();
+    tl_key(13);
+    ok = msg_is("NOTHING COPIED") && TSEL->p[P_SLEN] == 16;
+    a = leds_at(0); b2 = leds_at(250);
+    ok &= ((a ^ b2) >> white(12)) & 1u && !(((a | b2) >> white(13)) & 1u);   /* (COPY breathes, PASTE dark) */
+    tl_key(12);
+    a = leds_at(0); b2 = leds_at(250);
+    ok &= msg_is("PAGE 1 COPIED") && (((a ^ b2) >> white(13)) & 1u);
+    bad += check("  D5 COPY: \"PAGE 1 COPIED\" (E5 breathes now); E5 before: \"NOTHING COPIED\"", ok);
+    undo_ok = 0;
+    tl_key(13);                                         /* onto page 1, which holds it: page 2 */
+    ok = msg_is("PASTED TO PAGE 2") && TSEL->p[P_SLEN] == 32 && ui.cursor == 21u && ui.bank == 1u &&
+         !memcmp(&TSEL->step[16], &TSEL->step[0], 16u * sizeof(step_t)) && TSEL->step[20].time == ST_REST &&
+         tl_lock_at(19) && tl_lock_at(3) && !motion_lock_get(TSEL, 18, P_DIST, &(int16_t){0}) &&
+         motion_find(TSEL, 21, P_DIST) >= 0 && motion_find(TSEL, 5, P_DIST) >= 0 && undo_ok;
+    bad += check("  E5 PASTE onto the copied page: page 2, LEN 16 > 32, the steps, automation and locks (none on an empty step)", ok);
+    tl_key(13);
+    ok = msg_is("PASTED TO PAGE 3") && TSEL->p[P_SLEN] == 48 && TSEL->step[32].note[0] == 60;
+    btn_up(B_SEQ); frame();
+    ok &= !undo_do() && TSEL->p[P_SLEN] == 32 && TSEL->step[32].time == ST_REST && TSEL->step[16].note[0] == 60;
+    bad += check("  again: page 3 (LEN 48); GLO + G4 UNDO takes the paste back", ok);
+    cursor_set(20);                                     /* page 2: other steps, the copy over them */
+    TSEL->step[16].note[0] = 50;
+    (void)motion_set_event(TSEL, 17, P_REV, 30);
+    btn_down(B_SEQ); frame();
+    tl_key(13);
+    ok = msg_is("PASTED TO PAGE 2") && TSEL->step[16].note[0] == 60 && motion_find(TSEL, 17, P_REV) < 0 &&
+         TSEL->p[P_SLEN] == 32;
+    btn_up(B_SEQ); frame();
+    bad += check("  onto another page: its steps and its automation replaced, LEN kept", ok);
+    {   /* the 64 records: what fits */
+        uint32_t j, m0;
+        motion_reset(TSEL); motion_reset(&trk[1]);
+        (void)motion_set_event(TSEL, 1, P_DIST, 40);
+        (void)motion_set_event(TSEL, 4, P_DIST, 41);
+        cursor_set(0);
+        btn_down(B_SEQ); frame();
+        tl_key(12);
+        for (j = 0; motion.count < MOTION_MAX - 1u; j++)
+            (void)motion_set_event(&trk[1], j, P_DIST, 20);
+        m0 = motion.count;
+        tl_key(13);
+        ok = msg_is("PASTED TO PAGE 2") && str_eq(ui.msg2, "AUTO FULL: 1 LEFT OUT") && motion.count == MOTION_MAX &&
+             m0 == MOTION_MAX - 1u && motion_find(TSEL, 17, P_DIST) >= 0 && motion_find(TSEL, 20, P_DIST) < 0;
+        btn_up(B_SEQ); frame();
+        motion_reset(&trk[1]);
+        bad += check("  the 64 records run out: the ones that fit pasted, \"AUTO FULL: 1 LEFT OUT\"", ok);
+    }
+    {   /* DRUM: the grid's page (black keys 10 / 11); a DRUM page onto a melodic track: no */
+        uint32_t tm = song.sel;
+        ui_power_on();
+        tl_drum();
+        TSEL->p[P_SLEN] = 32;
+        grid_hit(TSEL, 20, DV_SNARE, 1);
+        go_page(GR_ROLL); frame();
+        cursor_set(18);
+        btn_down(B_SEQ); frame();
+        tl_key(12);
+        ok = msg_is("PAGE 2 COPIED");
+        btn_up(B_SEQ); frame();
+        cursor_set(0);
+        btn_down(B_SEQ); frame();
+        tl_key(13);
+        ok &= msg_is("PASTED TO PAGE 1") && ((step_lanes(&TSEL->step[4]) >> DV_SNARE) & 1u) &&
+              !((step_lanes(&TSEL->step[0]) >> DV_KICK) & 1u) && TSEL->p[P_SLEN] == 32;
+        btn_up(B_SEQ); frame();
+        tm = song.sel;
+        song.sel = (song.sel + 1u) % NTRK;
+        ok &= !drum_track(TSEL);
+        tl_melody();
+        memcpy(ref, TSEL->step, sizeof ref);
+        go_page(GR_ROLL); frame();
+        btn_down(B_SEQ); frame();
+        tl_key(13);
+        ok &= msg_is("DRUM PAGE: DRUM ONLY") && !memcmp(TSEL->step, ref, sizeof ref);
+        btn_up(B_SEQ); frame();
+        song.sel = tm;
+        bad += check("  DRUM: the grid's page copied, pasted onto page 1; onto a melodic track: \"DRUM PAGE: DRUM ONLY\"", ok);
+    }
+
     /* a song playing */
     ui_power_on();
     tl_melody();
