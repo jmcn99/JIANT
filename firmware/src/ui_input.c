@@ -715,6 +715,99 @@ static void note_drop(step_t *st, uint32_t j)           /* note j out of the ste
     if (st->n) st->note[--st->n] = 0;
     if (!st->n && !st->hit) st->time = ST_REST;
 }
+/* (after 0.7.2) SEQ > STEP's TIME on a melodic track: a TIE stretches back to the note before it, a REST cuts the note's TIEs
+ * after it. Steps 1..LEN only, round its end (the pattern loops). The note a step is part of: itself when a NOTE with
+ * something in it, else back over the TIEs to one; -1 none (a REST before, or no note anywhere) */
+static int32_t tie_note(const track_t *t, uint32_t c, uint32_t len)
+{
+    uint32_t k;
+    for (k = 0; k < len; k++) {
+        const step_t *s = &t->step[(c + len - k) % len];
+        if (s->time == ST_NOTE && (s->n || s->hit)) return (int32_t)((c + len - k) % len);
+        if (s->time != ST_TIE) return -1;
+    }
+    return -1;
+}
+static void tie_say(const char *a, uint32_t x, uint32_t y)   /* "TIED 1-5", "CUT AT 3" (steps 1-based; y 0: x alone) */
+{
+    char m[24];
+    str_cpy(m, a, sizeof m);
+    fmt_int(m + str_len(m), (int32_t)x);
+    if (y) { str_cpy(m + str_len(m), "-", 2); fmt_int(m + str_len(m), (int32_t)y); }
+    ui_message(m);
+}
+/* step c turned TIE: the steps between it and the nearest note before it (RESTs and TIEs only: a note there would be the
+ * nearest) become that note's TIEs, with its velocity, as LEN wrote them. What else such a step holds stays (KNOB 3
+ * changes a step's TIME only): its notes kept unheard, its components, CHANCE, locks and automation, which now count,
+ * inside a sounding note (a CHANCE that fails ends the note there, as on any TIE). No note before it: a TIE alone, as
+ * before. A PULSE note is not filled: its empty steps replay it, TIEs never would.
+ * tie_last: the step turned TIE last (was: its TIME before) and the steps it filled, so a turn on to REST on it right
+ * after (the knob goes NOTE -> TIE -> REST a detent at a time) puts them back: a REST on a NOTE clears that note and
+ * fills nothing. TIE -> NOTE keeps them (a new note, the fill stays) */
+static struct {
+    uint8_t on, trk, c, was;
+    uint32_t sig;                                       /* (the steps as it left them: any other edit forgets it) */
+    uint64_t filled, rest;                              /* the steps filled, those of them RESTs before (else empty NOTEs) */
+    uint8_t vel[NSTEP];
+} tie_last;
+static void tie_fill(track_t *t, uint32_t c, uint32_t len, uint32_t was)
+{
+    uint32_t k, o = len, n = 0;
+    const step_t *on;
+    tie_last.on = 1; tie_last.trk = (uint8_t)song.sel; tie_last.c = (uint8_t)c; tie_last.was = (uint8_t)was;
+    tie_last.filled = tie_last.rest = 0;
+    for (k = 1; k < len && o == len; k++) {
+        const step_t *s = &t->step[(c + len - k) % len];
+        if (s->time == ST_NOTE && (s->n || s->hit)) o = (c + len - k) % len;
+    }
+    if (o < len) {
+        on = &t->step[o];
+        for (k = (o + 1u) % len; k != c; k = (k + 1u) % len)
+            n += t->step[k].time != ST_TIE;
+        if (n && (on->comp == CP_PULSE || on->comp2 == CP_PULSE)) {
+            ui_message("PULSE: NOT FILLED");
+        } else if (n) {
+            for (k = (o + 1u) % len; k != c; k = (k + 1u) % len) {
+                step_t *s = &t->step[k];
+                if (s->time == ST_TIE) continue;
+                tie_last.filled |= (uint64_t)1 << k;
+                if (s->time == ST_REST) tie_last.rest |= (uint64_t)1 << k;
+                tie_last.vel[k] = s->vel;
+                s->time = ST_TIE;
+                s->vel = on->vel;
+            }
+            tie_say("TIED ", o + 1u, c + 1u);
+        }
+    }
+    tie_last.sig = steps_sig(t);
+}
+/* step c turned from the TIE tie_fill made it back to REST right after: the steps it filled as they were. 1: done
+ * (*was: c's TIME before the TIE) */
+static int tie_unfill(track_t *t, uint32_t c, uint32_t *was)
+{
+    uint32_t k;
+    if (!tie_last.on || tie_last.trk != song.sel || tie_last.c != c || tie_last.sig != steps_sig(t))
+        return 0;
+    tie_last.on = 0;
+    for (k = 0; k < NSTEP; k++)
+        if ((tie_last.filled >> k) & 1u) {
+            t->step[k].time = (tie_last.rest >> k) & 1u ? ST_REST : ST_NOTE;
+            t->step[k].vel = tie_last.vel[k];
+        }
+    *was = tie_last.was;
+    return 1;
+}
+/* step c, part of a note, is now empty (a REST): the TIEs right after it become RESTs, their locks gone (as the tools
+ * do: a step that held something and is empty after loses its locks). The steps cut */
+static uint32_t tie_cut(track_t *t, uint32_t c, uint32_t len)
+{
+    uint32_t k, n = 0;
+    for (k = (c + 1u) % len; k != c && t->step[k].time == ST_TIE; k = (k + 1u) % len, n++) {
+        t->step[k].time = ST_REST;
+        (void)motion_clear_locks(t, k);
+    }
+    return n;
+}
 static void note_edit(uint32_t slot, int32_t steps)
 {
     track_t *t = TSEL;
@@ -834,9 +927,26 @@ static void step_edit(uint32_t slot, int32_t steps)
         st->time = ST_NOTE;
         last_note = st->note[0];
         break;
-    case 2:
+    case 2: {                                             /* TIME: NOTE / TIE / REST; (after 0.7.2) a TIE fills back to */
+        uint32_t len = (uint32_t)clamp(TSEL->p[P_SLEN], 1, NSTEP), was = st->time, c = ui.cursor, w;   /* its note, */
+        int32_t part = c < len ? tie_note(TSEL, c, len) : -1;   /* a REST cuts the note's TIEs after it */
         st->time = (uint8_t)clamp((int32_t)st->time + (steps > 0 ? 1 : -1), ST_NOTE, ST_REST);
-        break;
+        if (c >= len || st->time == was)
+            break;
+        if (st->time == ST_TIE) {
+            tie_fill(TSEL, c, len, was);
+            break;
+        }
+        if (st->time == ST_REST) {
+            st->time = ST_TIE;                            /* (as tie_fill left the steps) */
+            if (tie_unfill(TSEL, c, &w))                  /* just turned TIE: as it was before, a NOTE or a REST */
+                part = w == ST_NOTE && (st->n || st->hit) ? (int32_t)c : -1;
+            st->time = ST_REST;
+            if (part >= 0 && tie_cut(TSEL, c, len))
+                tie_say("CUT AT ", c + 1u, 0);
+        }
+        break;                                            /* (TIE -> NOTE: a new note, the fill stays TIEs) */
+    }
     default: {                                            /* FLAG: - / ACC / SLD / A+S */
         uint32_t f = (st->flags & SF_ACCENT ? 1u : 0u) | (st->flags & SF_SLIDE ? 2u : 0u);
         f = (uint32_t)clamp((int32_t)f + (steps > 0 ? 1 : -1), 0, 3);
@@ -1725,10 +1835,18 @@ static int page_tap(uint32_t b)
             ui_message("NOTE DELETED");
             return 1;
         }
-        step_clear(&TSEL->step[ui.cursor]);
-        (void)motion_clear_locks(TSEL, ui.cursor);
-        cursor_set(ui.cursor + 1);
-        ui_message("STEP CLEARED");
+        {                                               /* (after 0.7.2) a melodic track: the note's TIEs after it go too */
+            uint32_t c = ui.cursor, len = (uint32_t)clamp(TSEL->p[P_SLEN], 1, NSTEP), cut = 0;
+            int32_t part = c < len && !drum_track(TSEL) ? tie_note(TSEL, c, len) : -1;
+            step_clear(&TSEL->step[c]);
+            (void)motion_clear_locks(TSEL, c);
+            if (part >= 0)
+                cut = tie_cut(TSEL, c, len);
+            cursor_set(c + 1u);
+            if (!cut) ui_message("STEP CLEARED");
+            else if (part == (int32_t)c) ui_message("NOTE CLEARED");
+            else tie_say("CUT AT ", c + 1u, 0);
+        }
         return 1;
     }
     if (b == B_EDIT && !ui.home && cur_page()->graph == GR_EVENTS) {   /* AUTO LIST: EDIT deletes the row's record */

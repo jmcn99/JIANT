@@ -7821,6 +7821,170 @@ static int test_note_page(void)
     ui_power_on();
     return bad;
 }
+/* (after 0.7.2) SEQ > STEP's KNOB 3 TIME on a melodic track: a TIE fills back to the nearest note before it (within LEN,
+ * round its end; a PULSE note not), a REST on a note cuts its TIEs after it (their locks gone), TIE -> NOTE keeps the
+ * fill, NOTE -> TIE -> REST clears the note and fills nothing; EDIT cuts the TIEs too; a DRUM track's grid as before;
+ * the filled note sounds over every step, a chord's four notes held */
+static void tf_steps(track_t *t, uint32_t len)          /* every step a REST, LEN len */
+{
+    uint32_t i;
+    for (i = 0; i < NSTEP; i++) { memset(&t->step[i], 0, sizeof t->step[i]); t->step[i].time = ST_REST; }
+    t->p[P_SLEN] = (int16_t)len;
+}
+static void tf_note(track_t *t, uint32_t i, uint8_t n)
+{
+    t->step[i].time = ST_NOTE; t->step[i].n = 1; t->step[i].note[0] = n; t->step[i].vel = 100;
+}
+static void tf_ties(track_t *t, uint32_t a, uint32_t b)  /* steps a..b (0-based) TIEs */
+{
+    for (; a <= b; a++) { memset(&t->step[a], 0, sizeof t->step[a]); t->step[a].time = ST_TIE; }
+}
+static uint32_t tf_mask(const track_t *t, uint32_t time)  /* steps 1..32 of that TIME, a bit each */
+{
+    uint32_t i, m = 0;
+    for (i = 0; i < 32u; i++) m |= (uint32_t)(t->step[i].time == time) << i;
+    return m;
+}
+static void tf_k3(uint32_t c, int32_t d) { cursor_set((int32_t)c); ui.msg_t = 0; turn(EN_K3, d); }
+static int tf_lock(const track_t *t, uint32_t i) { int16_t v; return motion_lock_get(t, i, P_REV, &v) && v == 50; }
+static int test_tie_fill(void)
+{
+    int bad = 0, ok;
+    track_t *t;
+    uint32_t i, k;
+    ui_power_on();
+    t = TSEL;
+    go_title("STEP"); frame();
+    tf_steps(t, 16); tf_note(t, 0, 60);                 /* a note on 1, RESTs 2..4, TIE on 5 */
+    tf_k3(4, -1);
+    ok = tf_mask(t, ST_TIE) == 0x1Eu && tf_mask(t, ST_NOTE) == 1u && note_len(t, 0, 16) == 5u && t->step[2].vel == 100u &&
+         msg_is("TIED 1-5") && ui.cursor == 4u;
+    bad += check("STEP KNOB 3: a TIE on step 5 after a note on 1 fills 2..4 (TIED 1-5): one note over 1..5", ok);
+    tf_k3(4, -1);                                       /* on past TIE to NOTE: a new note, the fill stays */
+    ok = t->step[4].time == ST_NOTE && tf_mask(t, ST_TIE) == 0x0Eu && note_len(t, 0, 16) == 4u;
+    bad += check("  on to NOTE: step 5 a note again, 2..4 stay TIEs (no un-filling)", ok);
+
+    tf_steps(t, 16);                                    /* nothing before it: a TIE alone */
+    tf_k3(4, -1);
+    ok = tf_mask(t, ST_TIE) == 0x10u && tf_mask(t, ST_REST) == (0xFFFFFFFFu & ~0x10u) && !ui.msg_t;
+    bad += check("  no note before it: a plain TIE, nothing else changed, no message", ok);
+
+    tf_steps(t, 16); tf_note(t, 14, 62); tf_note(t, 20, 70);   /* round LEN's end (step 21: past LEN, never reached) */
+    tf_k3(1, -1);
+    ok = tf_mask(t, ST_TIE) == ((1u << 15) | 1u | 2u) && msg_is("TIED 15-2") && t->step[20].time == ST_NOTE;
+    bad += check("  round the end: a note on 15 of LEN 16, a TIE on 2 fills 16 and 1 (TIED 15-2)", ok);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_note(t, 3, 64); tf_ties(t, 4, 4);   /* NOTE -> TIE: into the note before */
+    tf_k3(3, 1);
+    ok = tf_mask(t, ST_TIE) == 0x1Eu && note_len(t, 0, 16) == 5u && msg_is("TIED 1-4") && t->step[3].note[0] == 64u;
+    bad += check("  a NOTE turned TIE merges into the note before (its TIEs with it), its notes kept unheard", ok);
+    tf_k3(3, -1);                                       /* back to NOTE: there again, 2..3 stay */
+    ok = t->step[3].time == ST_NOTE && note_len(t, 3, 16) == 2u && note_len(t, 0, 16) == 3u;
+    bad += check("  .. and back to NOTE: the note there again with its TIE, the fill stays", ok);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_ties(t, 1, 4);   /* REST in the middle: cut */
+    tf_k3(2, 1);
+    ok = tf_mask(t, ST_TIE) == 0x02u && tf_mask(t, ST_NOTE) == 1u && msg_is("CUT AT 3");
+    bad += check("  REST on 3 of a note over 1..5: the note 1..2, 3..5 RESTs (CUT AT 3)", ok);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_ties(t, 1, 4); tf_note(t, 12, 67);   /* REST on the NOTE: through TIE */
+    tf_k3(0, 1);
+    ok = msg_is("TIED 13-1") && tf_mask(t, ST_TIE) == 0xE01Fu;
+    tf_k3(0, 1);
+    ok &= t->step[0].time == ST_REST && tf_mask(t, ST_TIE) == 0u && tf_mask(t, ST_NOTE) == (1u << 12) && msg_is("CUT AT 1");
+    bad += check("  NOTE -> TIE -> REST on a note's NOTE: the whole note cleared, the passing fill put back", ok);
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_ties(t, 1, 4);   /* (no note anywhere before it: the same) */
+    tf_k3(0, 1); tf_k3(0, 1);
+    ok = tf_mask(t, ST_TIE) == 0u && tf_mask(t, ST_NOTE) == 0u;
+    bad += check("  .. and with no note before it to merge into", ok);
+    tf_steps(t, 16); tf_note(t, 0, 60); t->step[2].time = ST_NOTE;   /* REST -> TIE -> REST: back as it was */
+    tf_k3(4, -1); tf_k3(4, 1);
+    ok = tf_mask(t, ST_TIE) == 0u && t->step[2].time == ST_NOTE && !t->step[2].n && t->step[1].time == ST_REST &&
+         t->step[1].vel == 0u;
+    bad += check("  REST -> TIE -> REST: the steps filled as they were (a REST, an empty NOTE)", ok);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_ties(t, 3, 4);   /* locks: kept on filled steps, gone on cut ones */
+    motion_clear_locks(t, NSTEP);
+    motion_set_lock(t, 1, P_REV, 50); motion_set_lock(t, 3, P_REV, 50); motion_set_lock(t, 4, P_REV, 50);
+    t->step[1].probability = 50;
+    tf_k3(2, -1);
+    ok = tf_mask(t, ST_TIE) == 0x1Eu && tf_lock(t, 1) && t->step[1].probability == 50u;
+    tf_k3(1, 1);                                        /* REST on 2: 3..5 cut */
+    ok &= tf_mask(t, ST_TIE) == 0u && !tf_lock(t, 3) && !tf_lock(t, 4);
+    ok &= tf_lock(t, 1);                                /* (the step turned REST keeps its own, as KNOB 3 always did) */
+    bad += check("  locks: a filled step keeps its locks and CHANCE; cut TIEs lose theirs, the step turned REST keeps its own",
+                 ok);
+    motion_clear_locks(t, NSTEP);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); t->step[0].comp = CP_PULSE;   /* PULSE: not filled */
+    tf_k3(4, -1);
+    ok = tf_mask(t, ST_TIE) == 0x10u && msg_is("PULSE: NOT FILLED");
+    bad += check("  a PULSE note: not filled (its empty steps replay it), the TIE alone", ok);
+
+    tf_steps(t, 16); tf_note(t, 0, 60); tf_ties(t, 1, 4);   /* EDIT: the note's TIEs after the step go too */
+    cursor_set(2); press(B_EDIT); frame();
+    ok = tf_mask(t, ST_TIE) == 0x02u && msg_is("CUT AT 3") && ui.cursor == 3u;
+    cursor_set(0); press(B_EDIT); frame();
+    ok &= tf_mask(t, ST_TIE) == 0u && tf_mask(t, ST_NOTE) == 0u && msg_is("NOTE CLEARED");
+    tf_note(t, 5, 60); cursor_set(5); press(B_EDIT); frame();
+    ok &= msg_is("STEP CLEARED");
+    bad += check("  EDIT on a TIE cuts the rest of the note, on the NOTE the whole note (a step alone: STEP CLEARED)", ok);
+
+    {   /* DRUM: STEP is the grid, untouched */
+        step_t ref[NSTEP];
+        set_engine_of(t, ENGI_DRUM); frame();
+        tf_steps(t, 16); tf_note(t, 0, 60); t->step[0].hit = 1; tf_ties(t, 1, 1);
+        memcpy(ref, t->step, sizeof ref);
+        cursor_set(4); turn(EN_K3, 1); turn(EN_K3, -1);
+        for (k = 0, ok = 1; k < NSTEP; k++) ok &= k == 4u || !memcmp(&ref[k], &t->step[k], sizeof ref[k]);
+        ok &= t->step[4].time != ST_TIE;
+        cursor_set(0); press(B_EDIT); frame();
+        ok &= t->step[1].time == ST_TIE;
+        bad += check("  a DRUM track: KNOB 3 is the grid's HIT (no fill), EDIT leaves the TIE after", ok);
+        set_engine_of(t, ENGI_ANALOG); frame();
+    }
+
+    {   /* playback: a chord on 1, a TIE set on 5: all four notes sound unstruck over 1..5, released on 6 */
+        uint32_t ages[NVOICE], held = 0, kept = 1, rel = 1, before = 0;
+        set_engine_of(t, ENGI_ANALOG); apply_preset_to(t, 1); t->engine = t->eng_req;
+        t->p[P_VOICE] = V_POLY; t->p[P_SGATE] = 60; t->p[P_SUS] = 120; t->p[P_GLIDE] = 0;
+        tf_steps(t, 8);
+        t->step[0].time = ST_NOTE; t->step[0].n = 4; t->step[0].vel = 100;
+        t->step[0].note[0] = 60; t->step[0].note[1] = 64; t->step[0].note[2] = 67; t->step[0].note[3] = 71;
+        for (k = 0; k < NVOICE; k++) t->v[k].active = 0;
+        memset(fg_set, 0, sizeof fg_set);
+        transport_req = 1; ui_input();                  /* (before: the chord ends in step 1, GATE 60) */
+        while (t->seq_idx == 0u) events_block(CTL);
+        for (i = 0; i < 4u; i++) events_block(CTL);
+        for (k = 0; k < NVOICE; k++) before += t->v[k].active && t->v[k].gate;
+        transport_req = 2; ui_input();
+        for (i = 0; i < 40u; i++) events_block(CTL);
+        go_title("STEP"); frame();
+        tf_k3(4, -1);                                   /* TIE on 5 */
+        for (k = 0; k < NVOICE; k++) t->v[k].active = 0;
+        transport_req = 1; ui_input();
+        for (i = 0; i < 4u; i++) events_block(CTL);
+        for (k = 0; k < NVOICE; k++) ages[k] = t->v[k].active && t->v[k].gate ? t->v[k].age : 0u;
+        for (k = 0; k < NVOICE; k++) held += ages[k] != 0u;
+        for (i = 1; i < 5u; i++) {                      /* into steps 2..5, then the last part of each */
+            uint32_t n = 0;
+            while (t->seq_idx < i) events_block(CTL);
+            while (t->seq_pos < step_samples(t, div_samples((uint32_t)t->p[P_SDIV]), i) * 7u / 8u) events_block(CTL);
+            for (k = 0; k < NVOICE; k++) n += ages[k] && t->v[k].active && t->v[k].gate && t->v[k].age == ages[k];
+            kept &= n == 4u;
+        }
+        while (t->seq_idx < 5u) events_block(CTL);
+        for (i = 0; i < 4u; i++) events_block(CTL);
+        for (k = 0; k < NVOICE; k++) rel &= !(t->v[k].active && t->v[k].gate);
+        transport_req = 2; ui_input();
+        for (i = 0; i < 40u; i++) events_block(CTL);
+        ok = before == 0u && held == 4u && kept && rel;
+        bad += check("  playback: a 4-note chord on 1, TIE set on 5: its four voices held unstruck to the end of 5, off on 6",
+                     ok);
+    }
+    ui_power_on();
+    return bad;
+}
 /* (0.6.81) a POLY chord with SLD glides into the next: its voices go on (not struck again), their pitch moving to the
  * new notes low to high; 3 -> 4 notes: the extra one starts from the nearest old note and fades in; 4 -> 3: the one
  * left glides on, released */
@@ -9156,6 +9320,7 @@ int main(void)
     bad += test_chord();
     bad += test_trans_seq();
     bad += test_note_page();
+    bad += test_tie_fill();
     bad += test_chord_glide();
     bad += test_fx_sections();
     bad += test_clear_ghosts();

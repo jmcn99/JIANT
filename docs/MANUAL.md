@@ -100,7 +100,7 @@ The names below are the ones the firmware uses (the HARDWARE CALIBRATION screen 
 | **LFO** | LFO pages. | **MACRO** layer: KNOB 1–4 are M1–M4. |
 | **FX** | FX pages (two quick taps: next FX section). | **Punch-in FX** layer. |
 | **SCL** | SCL pages. | **SCL** layer: keys set the root. |
-| **EDIT** | EDIT pages (on STEP: clears the step; on USER / PROJECT: rename). | **EDIT** layer: INIT, RECALL, DRUM-X sound mutes. |
+| **EDIT** | EDIT pages (on STEP: clears the step, and a note's TIEs after it; on USER / PROJECT: rename). | **EDIT** layer: INIT, RECALL, DRUM-X sound mutes. |
 | **GLO** | MIXER → GLOBAL → SYSTEM → MIXER. | **GLO** layer: mutes, solos, levels, tap tempo, UNDO. |
 | **SAVE** | SAVE pages (first press: USER). | **SAVE** layer: play/store sections live. |
 | **ARP** | ARP pages. | (no layer) |
@@ -474,6 +474,11 @@ of different lengths turn against each other.
 
 - **SEQ > STEP** on a melodic track is a **piano roll**. KNOB 1 moves the step cursor, KNOB 2 transposes the step,
   KNOB 3 sets NOTE / TIE / REST, KNOB 4 sets accent / slide. A step holds up to four notes.
+  - **Note lengths with KNOB 3**: a **TIE** stretches back to the nearest note before it: the empty steps in between
+    become TIEs too (TIED 1-5), within LEN and round its end. A note with a PULSE component is not filled.
+  - A **REST** on a note (its NOTE or one of its TIEs) cuts it there: the TIEs after it become rests (CUT AT 3), and
+    lose their parameter locks. Turning on past TIE to NOTE makes a new note and keeps the filled TIEs; turning a NOTE
+    through TIE to REST clears that note and fills nothing.
 - **Step recording**: on STEP, while **stopped**, press **REC** (the screen says KEYS WRITE STEPS). Play a note or a
   chord: it goes into the cursor step, and when you let go the cursor moves on. Not armed, the keys just play.
   - **Length**: while the keys are held, turn **KNOB 1**: the note or chord lasts that many steps (1–16, ties after it).
@@ -482,7 +487,7 @@ of different lengths turn against each other.
     now its resolution (1/16, 1/8, 1/8., 1/4: a note every 1–4 steps), KNOB 2 the order (UP, DOWN, UP-DN, RND), KNOB 3
     the octaves (1–3). The screen shows the settings; letting go writes it, the cursor after it. KNOB 4 (and 2–3
     without ARP) still makes parameter locks on the step.
-- **EDIT** (tap) on STEP clears the cursor step.
+- **EDIT** (tap) on STEP clears the cursor step; on a note, the TIEs after it go too (as a REST on KNOB 3).
 - On a **DRUM** track, STEP is a **grid**: white keys are the 16 steps of the page, black keys 1–8 pick the lane
   (and play it), black key 9 held is ACC (white keys then toggle accents), black keys 10 / 11 page down / up when
   LEN is over 16. Knobs: STEP, LANE, HIT, ACC.
