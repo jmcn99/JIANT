@@ -19,9 +19,10 @@
  *              (eng_drum.c DXM_LANE, saved with the section; lit = sounding)
  *   SEQ  SET   (1.2, on the SEQ pages that show the pattern: STEP / the DRUM grid, PATTERN, CHANCE, AUTOMATION; elsewhere
  *              SEQ held opens SONG as before) TOOLS: the white keys from F3 the sequence tools (ui_tools.c: CLEAR,
- *              REVERSE, SHIFT < >, RANDOM, COOK, CLR AUTO (0.6.8: the track's automation); on a DRUM track BEAT and the lane's CLEAR REVERSE FILL RANDOM), black
+ *              REVERSE, SHIFT < >, RANDOM, COOK, CLR AUTO (0.6.8: the track's automation); on a DRUM track BEAT and the lane's CLEAR REVERSE FILL RANDOM;
+ *              D5 / E5 COPY / PASTE the cursor's 16-step page, JIANT), black
  *              keys 1..8 the lane (DRUM); KNOB 1..4 the PATTERN page's LEN DIV SWING GATE. No undo (TONIC: the song
- *              layer's RECALL)
+ *              layer's RECALL), but PASTE's (GLO + G4)
  *   REC  SET   (1.1.5, on every page; REC's tap still arms / disarms) the white keys from F3: CLEAR (the selected
  *              track's steps and automation, no dialog), CLICK (OFF REC ON, each press the next value); KNOB 1 the
  *              same (TONIC: COUNT-IN and CLICK LEVEL only in MENU > AUDIO). The settings
@@ -324,10 +325,23 @@ static void tools_key(uint32_t p)
 {
     const char *m;
     char n[4];
+    uint32_t lost = 0;
     if (!tl_cell(TSEL, p))
         return;
     if (chain_busy()) {
         ui_message("STOP TO EDIT");
+        return;
+    }
+    if (p == TL_COPY || p == TL_PASTE) {                /* (JIANT) the cursor's page */
+        if (!(m = p == TL_COPY ? tl_page_copy(TSEL, tl_page_now(TSEL)) : tl_page_paste(TSEL, tl_page_now(TSEL), &lost)))
+            return;
+        ui_message(m);
+        if (lost) {                                     /* "AUTO FULL: 3 LEFT OUT" */
+            str_cpy(ui.msg2, "AUTO FULL: ", sizeof ui.msg2);
+            fmt_int(ui.msg2 + str_len(ui.msg2), (int32_t)lost);
+            str_cpy(ui.msg2 + str_len(ui.msg2), " LEFT OUT", sizeof ui.msg2 - str_len(ui.msg2));
+        }
+        ui.force = 1;
         return;
     }
     if (!(m = tl_do(TSEL, p, ui.lane)))
@@ -722,7 +736,8 @@ static uint32_t layer_leds(uint32_t *br)
         } else if (l == LAYER_SEQ) {                    /* the tools breathe (not while a song plays); DRUM: the lane */
             on = b && p < NLANE && drum_track(TSEL) && p == ui.lane;   /* lit, the other lanes breathe */
             can = b ? p < NLANE && drum_track(TSEL) : tl_cell(TSEL, p) && !chain_busy() &&
-                  (p != TL_CAUTO || motion_count(TSEL));   /* (CLR AUTO: automation to clear) */
+                  (p != TL_CAUTO || motion_count(TSEL)) && (p != TL_PASTE || tl_pg.valid);   /* (CLR AUTO: automation
+                                                         * to clear; PASTE: a page copied) */
         } else if (l == LAYER_SAVE && !b) {             /* the section playing lit, the saved ones and the */
             on = (p < SK_STORE && live.cur == (int8_t)p) || (p == SK_REC && live.srec) ||   /* actions breathe */
                  (p == SK_MODE && live.mode);
@@ -950,32 +965,46 @@ static void layer_edit(void)                            /* F3 INIT, G3 RECALL (a
 
 /* SEQ TOOLS: the white keys' tools, 4 a row from F3 (the whole sequence; RANDOM COOK BEAT; the lane's), on a DRUM
  * track the lanes of black keys 1..8 under them (the selected one: the selection's fill). A melodic track: the two
- * rows of the sequence's tools only */
+ * rows of the sequence's tools, then (JIANT) COPY PASTE (D5 E5) in the third. On a DRUM track the three rows a little
+ * lower (26 px, 28 apart), then COPY PASTE in a short row (14 px, two columns each) and the lanes (14 px) */
 static const uint8_t TL_ICON[TL_N] = {ICON_CLEAR, ICON_X_REVERSE, ICON_X_LEFT, ICON_X_RIGHT, ICON_PROB, ICON_W_SH,
-    ICON_DRUM, ICON_X_MOTION_DEL, ICON_CLEAR, ICON_X_REVERSE, ICON_STEPS, ICON_PROB};
+    ICON_DRUM, ICON_X_MOTION_DEL, ICON_CLEAR, ICON_X_REVERSE, ICON_STEPS, ICON_PROB, ICON_X_PATTERN, ICON_X_PATTERN};
 static const char *const TL_NAME[TL_N] = {"CLEAR", "REVERSE", "SHIFT", "SHIFT", "RANDOM", "COOK", "BEAT", "CLR AUTO",
-    "CLR", "REV", "FILL", "RND"};
+    "CLR", "REV", "FILL", "RND", "COPY", "PASTE"};
 static void layer_seq(void)
 {
-    uint32_t p, st = chain_busy() ? LS_DIM : LS_OFF, drum = (uint32_t)drum_track(TSEL);
+    uint32_t p, st = chain_busy() ? LS_DIM : LS_OFF, drum = (uint32_t)drum_track(TSEL), r;
     char n[3] = {0, 0, 0}, nm[10];
     for (p = 0; p < TL_N; p++) {
         if (!tl_cell(TSEL, p))
             continue;
+        r = p / 4u;
         n[0] = W_NOTE[p];                               /* (0.6.14) with its octave: F3 CLEAR and F4 CLR AUTO were */
         n[1] = (char)(p < 4u ? '3' : p < 11u ? '4' : '5');   /* both "F" (the white keys from F3: F G A B, C .. B, C) */
         str_cpy(nm, TL_NAME[p], sizeof nm);
-        if (p >= TL_LCLR) {                             /* the lane's: "CLR BD" */
+        if (p >= TL_LCLR && p <= TL_LRND) {             /* the lane's: "CLR BD" */
             str_cpy(nm + str_len(nm), " ", 2);
             str_cpy(nm + str_len(nm), drum_lane_abbr(TSEL, ui.lane), sizeof nm - str_len(nm));
         }
-        lcell(LC_X(p % 4u), 4 + 32 * (int32_t)(p / 4u), 28, n, TL_ICON[p], 0, nm, st, 0);
+        if (p >= TL_COPY && !drum)                      /* (a melodic track: in the lane tools' row) */
+            lcell(LC_X(p % 4u), 4 + 32 * 2, 28, n, TL_ICON[p], 0, nm, p == TL_PASTE && !tl_pg.valid ? LS_DIM : st, 0);
+        else if (p >= TL_COPY) {                        /* (DRUM: "D5 COPY" across two columns, no icon) */
+            int32_t x = LC_X(2u * (p - TL_COPY)), w = 2 * LC_W + 4;
+            uint16_t ink, fill = lc_box(x, 88, w, 14, lc_fill(p == TL_PASTE && !tl_pg.valid ? LS_DIM : st, &ink));
+            n[2] = ' ';
+            str_cpy(nm, n, 4);
+            str_cpy(nm + 3, TL_NAME[p], sizeof nm - 3u);
+            n[2] = 0;
+            GFX_HOOK_ALIGN(x, 88, x + w, 102, AL_HV, "tools copy / paste cell name centred");
+            cv_text_in(x, 88 + CAP_IN(S, 14), w, &AF_S, nm, ink, fill);
+        } else
+            lcell(LC_X(p % 4u), drum ? 4 + 28 * (int32_t)r : 4 + 32 * (int32_t)r, drum ? 26 : 28, n, TL_ICON[p], 0, nm, st, 0);
     }
     for (p = 0; drum && p < NLANE; p++) {               /* the lanes (black keys 1..8): 8 cells of 25 px, 4 px apart */
         int32_t x = 6 + 29 * (int32_t)p;
-        uint16_t ink, fill = lc_box(x, 100, 25, 18, lc_fill(p == ui.lane % NLANE ? LS_SEL : LS_OFF, &ink));
-        GFX_HOOK_ALIGN(x, 100, x + 25, 118, AL_HV, "tools lane cell name centred");
-        cv_text_in(x, 100 + CAP_IN(S, 18), 25, &AF_S, drum_lane_abbr(TSEL, p), ink, fill);
+        uint16_t ink, fill = lc_box(x, 104, 25, 14, lc_fill(p == ui.lane % NLANE ? LS_SEL : LS_OFF, &ink));
+        GFX_HOOK_ALIGN(x, 104, x + 25, 118, AL_HV, "tools lane cell name centred");
+        cv_text_in(x, 104 + CAP_IN(S, 14), 25, &AF_S, drum_lane_abbr(TSEL, p), ink, fill);
     }
 }
 
@@ -1209,7 +1238,8 @@ static void draw_layer(void)
     else if (l == LAYER_MACRO)
         sig += macro_sig();
     else if (l == LAYER_SEQ)
-        sig += (uint32_t)drum_track(TSEL) * 31u + ui.lane * 5u + (uint32_t)chain_busy() * 3u + (uint32_t)TSEL->p[P_E0] * 131u + song.sel * 977u;
+        sig += (uint32_t)drum_track(TSEL) * 31u + ui.lane * 5u + (uint32_t)chain_busy() * 3u + (uint32_t)TSEL->p[P_E0] * 131u + song.sel * 977u +
+               (uint32_t)tl_pg.valid * 65537u;
     else
         sig += snd_id() * 31u + (uint32_t)chain_busy() * 3u + (uint32_t)(project_recall_slot() + 1) * 5u + dx_mute * 7919u +
                (uint32_t)drum_track(TSEL) * 11u + up_gen * 101u;

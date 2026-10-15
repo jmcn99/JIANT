@@ -345,7 +345,17 @@ CH OH TM RS CB). Perillas: las cuatro de EDIT 1.
 derecha, C4 RANDOM, D4 COOK, E4 BEAT (DRUM), F4 CLR AUTO (la automatización y los locks de la pista; los pasos quedan).
 En una pista DRUM, las herramientas de carril: G4 CLR, A4 REV, B4 FILL, C5 RND sobre el carril elegido con las teclas
 negras 1–8. **REC** (con SEQ mantenido): CLEAR ALL. Perillas: LEN, DIV, SWING, GATE. Estas herramientas no tienen
-UNDO.
+UNDO, salvo PASTE.
+
+**D5 COPY / E5 PASTE** — una página de 16 pasos. "La página" es la página donde está el cursor de pasos (en la rejilla
+DRUM: la que muestran las teclas negras 10 / 11). COPY guarda los pasos de esa página con su automatización y sus
+parameter locks ("PAGE 1 COPIED"). PASTE los escribe sobre la página del cursor de la pista seleccionada, reemplazando
+la automatización y los locks de esos pasos ("PASTED TO PAGE 2"; sin nada copiado: "NOTHING COPIED"). El cursor no
+pasa de LEN, así que pegar sobre una página que ya tiene la copia la pega en la página siguiente, y LEN crece para
+incluirla: copia la página 1 y PASTE, PASTE, PASTE llena las páginas 2, 3 y 4. Si se acaban los 64 registros de
+automatización, se pega lo que cabe ("AUTO FULL: 3 LEFT OUT"). Una copia solo va a otra pista del mismo tipo (DRUM a
+DRUM, melódica a melódica); en otro motor se omite la automatización de los parámetros propios del motor. GLO + G4
+deshace un pegado.
 
 **REC** — F3 **CLEAR** borra los pasos y la automatización de la pista seleccionada (sin diálogo; UNDO lo puede
 recuperar), G3 **CLICK** (OFF / REC / ON). KNOB 1: CLICK.

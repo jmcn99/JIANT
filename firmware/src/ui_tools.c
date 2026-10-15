@@ -5,14 +5,15 @@
  *   F3 CLEAR  G3 REVERSE  A3 SHIFT <  B3 SHIFT >       the whole sequence
  *   C4 RANDOM D4 COOK     E4 BEAT (DRUM) F4 CLR AUTO     new / a little changed; (JIANT 0.6.8) F4: the track's automation
  *   G4 CLEAR  A4 REVERSE  B4 FILL  C5 RANDOM             the selected lane (DRUM: ui.lane, black keys 1..8 pick it)
+ *   D5 COPY   E5 PASTE                                   (JIANT) one 16-step page (tl_page_copy / tl_page_paste)
  * Each works on the selected track's steps 1..LEN (the steps past LEN stay); the track's automation stays (but
  * CLR AUTO's: it clears the track's automation and locks, every step, the steps stay). No undo
- * (TONIC): the song layer's RECALL brings the section back as it was stored.
+ * (TONIC): the song layer's RECALL brings the section back as it was stored (but PASTE's, below).
  * A step that held something and is empty after loses its locks (as EDIT's step clear); REVERSE and SHIFT move the
  * steps' automation and locks with them. RANDOM and COOK draw from libc.c rng(): no seed is kept, each press
  * differs. A sequence of ties reversed keeps its note first: N T T -> N T T at the mirrored place */
 enum { TL_CLEAR, TL_REV, TL_LEFT, TL_RIGHT, TL_RANDOM, TL_COOK, TL_BEAT, TL_CAUTO, TL_LCLR, TL_LREV, TL_LFILL, TL_LRND,
-       TL_N };
+       TL_COPY, TL_PASTE, TL_N };
 
 /* the steps as they were just before an action (tl_take): what REVERSE and SHIFT read; in the pool (RAM's .bss is
  * tight) */
@@ -23,7 +24,10 @@ static uint32_t tl_rnd(uint32_t n) { return n ? rng() % n : 0u; }
 static int tl_gate(const step_t *s) { return s->time == ST_NOTE && s->n; }
 static uint32_t tl_lane(const step_t *s, uint32_t l) { return (step_lanes(s) >> l) & 1u; }
 /* place p's action is there for this track (the lane row and BEAT: DRUM only) */
-static int tl_cell(const track_t *t, uint32_t p) { return p < TL_N && (p < TL_BEAT || p == TL_CAUTO || drum_track(t)); }
+static int tl_cell(const track_t *t, uint32_t p)
+{
+    return p < TL_N && (p < TL_BEAT || p == TL_CAUTO || p >= TL_COPY || drum_track(t));
+}
 
 /* the steps of t as they are now, before an action */
 static void tl_take(const track_t *t) { memcpy(tl_src, t->step, sizeof tl_src); }
@@ -498,4 +502,136 @@ static uint32_t tl_repeat(track_t *t, uint32_t k)       /* k: 2..8 times, 0: to 
     motion_unguard(f);
     t->p[P_SLEN] = (int16_t)nlen;
     return nlen;
+}
+
+/* ------------------------------------------- (JIANT) COPY / PASTE PAGE --- */
+/* D5 COPY: the 16 steps of a page of the selected track (the page the cursor is on: STEP / NOTE ui.cursor / 16, the
+ * DRUM grid's page ui.bank, black keys 10 / 11) into tl_pg, with their automation events and locks. The steps past
+ * LEN on a page LEN ends inside are copied as empty steps (what does not play is not copied).
+ * E5 PASTE: tl_pg onto the cursor's page of the selected track: its 16 steps and the automation / locks on them
+ * replaced; a lock on an empty step is not copied, so none lands on one (as tl_unlock clears them). A page past LEN:
+ * LEN grows to cover it. The cursor cannot go past LEN (cursor_set wraps), so a paste onto a page that already holds
+ * the copy goes to the page after it instead: COPY on page 1 then PASTE PASTE PASTE fills pages 2, 3, 4 (LEN 16 > 64). When
+ * the 64 motion records run out the events that fit are pasted ("AUTO FULL: n LEFT OUT").
+ * Between tracks: a DRUM page onto a DRUM track, a melodic page onto a melodic track only (a step's lane hits mean
+ * nothing to a melodic track, its notes nothing to the grid); another engine: the engine's own ids are left out (as
+ * motion_sound_loaded). The copy lasts until another COPY (not saved).
+ * PASTE is undoable (GLO + G4): the one SEQ TOOLS action with undo_mark(), an exception to "no undo" above (a paste
+ * can overwrite a page that took a while to make; STRETCH / REPEAT mark it the same way) */
+static struct {
+    step_t step[16];
+    motion_event_t ev[MOTION_MAX];                      /* (their step: the page's own 0..15, place's track bits 0) */
+    uint8_t valid, n, nev, drum, eng;                   /* (n: its steps inside LEN; eng: eng_idx) */
+} tl_pg __attribute__((section(".pool")));              /* (zeroed at boot: nothing copied) */
+
+/* the page the cursor is on, inside LEN */
+static uint32_t tl_page_now(const track_t *t)
+{
+    uint32_t pg = drum_track(t) ? ui.bank : ui.cursor / 16u, last = (tl_len(t) - 1u) / 16u;
+    return pg > last ? last : pg;
+}
+static const char *tl_page_copy(const track_t *t, uint32_t pg)
+{
+    static char b[20];
+    uint32_t len = tl_len(t), at = pg * 16u, k = trk_index(t), i;
+    tl_pg.n = (uint8_t)(len - at < 16u ? len - at : 16u);
+    for (i = 0; i < 16u; i++) {
+        if (i < tl_pg.n)
+            tl_pg.step[i] = t->step[at + i];
+        else
+            step_clear(&tl_pg.step[i]);
+    }
+    tl_pg.nev = 0;
+    for (i = 0; i < motion.count; i++) {
+        const motion_event_t *e = &motion.event[i];
+        if (MOTION_TRK(e) != k || MOTION_STEP(e) < at || MOTION_STEP(e) >= at + tl_pg.n ||
+            ((e->param & MOTION_LOCK) && t->step[MOTION_STEP(e)].time == ST_REST))
+            continue;                                   /* (a lock on an empty step: not copied, as tl_unlock) */
+        motion_at(&tl_pg.ev[tl_pg.nev], MOTION_STEP(e) - at, MOTION_VAL(e));
+        tl_pg.ev[tl_pg.nev++].param = e->param;
+    }
+    tl_pg.valid = 1;
+    tl_pg.drum = (uint8_t)drum_track(t);
+    tl_pg.eng = (uint8_t)eng_idx(t->eng_req);
+    str_cpy(b, "PAGE 1 COPIED", sizeof b);
+    b[5] = (char)('1' + pg);
+    return b;
+}
+/* page pg of t holds the copy already: its steps and its records the same (a lock on an empty step aside) */
+static int tl_page_same(const track_t *t, uint32_t pg)
+{
+    uint32_t at = pg * 16u, k = trk_index(t), i, n = 0;
+    if (memcmp(&t->step[at], tl_pg.step, sizeof tl_pg.step))
+        return 0;
+    for (i = 0; i < motion.count; i++) {                /* (as a COPY of it would hold them) */
+        const motion_event_t *e = &motion.event[i];
+        n += MOTION_TRK(e) == k && MOTION_STEP(e) >= at && MOTION_STEP(e) < at + 16u &&
+             !((e->param & MOTION_LOCK) && t->step[MOTION_STEP(e)].time == ST_REST);
+    }
+    if (n != tl_pg.nev)
+        return 0;
+    for (i = 0; i < tl_pg.nev; i++) {
+        const motion_event_t *e = &tl_pg.ev[i];
+        int32_t j = motion_find(t, at + MOTION_STEP(e), MOTION_ID(e));
+        if (j < 0 || motion.event[j].param != e->param || MOTION_VAL(&motion.event[j]) != MOTION_VAL(e))
+            return 0;
+    }
+    return 1;
+}
+/* the paste onto t at the cursor's page pg: its message (*lost: the records left out for room), 0 = nothing done
+ * (said why) */
+static const char *tl_page_paste(track_t *t, uint32_t pg, uint32_t *lost)
+{
+    static char b[20];
+    uint32_t at, i, k = trk_index(t), n, f, on, had, other = tl_pg.eng != eng_idx(t->eng_req);
+    *lost = 0;
+    if (!tl_pg.valid) {
+        ui_message("NOTHING COPIED");
+        return 0;
+    }
+    if (tl_pg.drum != (uint8_t)drum_track(t)) {
+        ui_message(tl_pg.drum ? "DRUM PAGE: DRUM ONLY" : "NOTE PAGE: NOT DRUM");
+        return 0;
+    }
+    if (pg + 1u < NSTEP / 16u && tl_page_same(t, pg))
+        pg++;                                           /* (already there: the page after it) */
+    at = pg * 16u;
+    undo_mark();                                        /* (0.6.21) UNDO: GLO + G4 (the exception: see above) */
+    for (i = 0; i < 16u; i++)
+        t->step[at + i] = tl_pg.step[i];
+    on = (motion.on >> k) & 1u;
+    had = motion_count(t);
+    f = motion_guard();                                 /* the page's records go */
+    motion_restore(t);
+    for (i = 0, n = 0; i < motion.count; i++) {
+        const motion_event_t *e = &motion.event[i];
+        if (MOTION_TRK(e) == k && MOTION_STEP(e) >= at && MOTION_STEP(e) < at + 16u)
+            continue;
+        motion.event[n++] = *e;
+    }
+    memset(motion.event + n, 0, (MOTION_MAX - n) * sizeof motion.event[0]);
+    motion.count = (uint8_t)n;
+    RING_PUBLISH();
+    motion_unguard(f);
+    for (i = 0; i < tl_pg.nev; i++) {                   /* the copy's, while there is room */
+        const motion_event_t *e = &tl_pg.ev[i];
+        uint32_t s = at + MOTION_STEP(e);
+        if (other && motion_engine_id(MOTION_ID(e)))
+            continue;
+        if (motion_put(t, s, MOTION_ID(e), MOTION_VAL(e), e->param & MOTION_LOCK) == 2u)
+            (*lost)++;
+    }
+    motion_full = 0;                                    /* (said here: AUTO FULL, not ui_notices' AUTOMATION FULL) */
+    if (had) {                                          /* (PLAY as it was; a track with none: on, as recording does) */
+        f = motion_guard();
+        motion.on = (uint8_t)(on ? motion.on | 1u << k : motion.on & ~(1u << k));
+        motion_unguard(f);
+    }
+    if (at + tl_pg.n > tl_len(t))
+        t->p[P_SLEN] = (int16_t)(at + tl_pg.n);
+    n = at + ui.cursor % 16u;                           /* (the cursor onto the page: it shows) */
+    cursor_set((int32_t)(n < tl_len(t) ? n : tl_len(t) - 1u));
+    str_cpy(b, "PASTED TO PAGE 1", sizeof b);
+    b[15] = (char)('1' + pg);
+    return b;
 }

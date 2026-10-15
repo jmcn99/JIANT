@@ -334,7 +334,16 @@ steps alone. On a DRUM track, black keys 1–8 mute each DRUM-X sound (BD SD CP 
 **SEQ TOOLS** (only on STEP, NOTE, PATTERN, COMP, TRACK and AUTOMATION) — F3 CLEAR, G3 REVERSE, A3 / B3 SHIFT left / right,
 C4 RANDOM, D4 COOK, E4 BEAT (DRUM), F4 CLR AUTO (the track's automation and locks; the steps stay). On a DRUM track the
 lane tools: G4 CLR, A4 REV, B4 FILL, C5 RND on the lane picked with black keys 1–8. **REC** (while SEQ is held): CLEAR
-ALL. Knobs: LEN, DIV, SWING, GATE. These tools have no undo.
+ALL. Knobs: LEN, DIV, SWING, GATE. These tools have no undo, except PASTE.
+
+**D5 COPY / E5 PASTE** — one 16-step page. "The page" is the page the step cursor is on (on the DRUM grid: the page
+black keys 10 / 11 show). COPY keeps that page's steps with their automation and parameter locks ("PAGE 1 COPIED").
+PASTE writes them over the cursor's page of the selected track, its own automation and locks on those steps replaced
+("PASTED TO PAGE 2"; nothing copied yet: "NOTHING COPIED"). The cursor can't go past LEN, so pasting onto a page that
+already holds the copy pastes onto the page after it, and LEN grows to take it in: copy page 1, then PASTE, PASTE,
+PASTE fills pages 2, 3 and 4. When the 64 automation records run out, what fits is pasted ("AUTO FULL: 3 LEFT OUT").
+A copy goes onto another track of the same kind only (DRUM onto DRUM, melodic onto melodic); onto another engine the
+engine's own parameters' automation is left out. GLO + G4 undoes a paste.
 
 **REC** — F3 **CLEAR** the selected track's steps and automation (no dialog; UNDO can bring it back), G3 **CLICK**
 (OFF / REC / ON). KNOB 1: CLICK.
